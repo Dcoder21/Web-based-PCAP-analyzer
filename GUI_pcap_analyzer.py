@@ -58,6 +58,80 @@ def http_host_VTCheck(pcap_file, api_key):
             results.append(result)
     return results
 
+# DNS Queries analysis
+def dns_queries(pcap_file, api_key):
+    dns_results = []
+    for pkt in pcap_file:
+        try:
+            if "DNS" in pkt:
+                query = pkt.dns.qry_name
+                resolved_ip = pkt.dns.a
+                if resolved_ip and not ip_address(resolved_ip).is_private:
+                    dns_results.append(f"DNS Query: {query} resolved to {resolved_ip}")
+        except AttributeError:
+            pass
+    return dns_results
+
+# Malicious TCP Connections analysis
+def malicious_tcp_connections(pcap_file, api_key):
+    unique_ips = set()
+    for pkt in pcap_file:
+        try:
+            if "TCP" in pkt:
+                unique_ips.add(pkt.ip.src)
+                unique_ips.add(pkt.ip.dst)
+        except AttributeError:
+            pass
+
+    results = []
+    for ip in unique_ips:
+        if not ip_address(ip).is_private:
+            result = domain_check_VT(ip, api_key)  # Reuse VirusTotal check for IPs
+            if result:
+                results.append(result)
+    return results
+
+# All Traffic analysis
+def analyze_all_traffic(pcap_file, api_key):
+    all_results = []
+    all_results.extend(http_requests(pcap_file, api_key))
+    all_results.extend(http_host_VTCheck(pcap_file, api_key))
+    all_results.extend(dns_queries(pcap_file, api_key))
+    all_results.extend(malicious_tcp_connections(pcap_file, api_key))
+    return all_results
+
+# TCP Payload analysis
+def tcp_payload(pcap_file):
+    payload_results = []
+    for pkt in pcap_file:
+        try:
+            if "TCP" in pkt and hasattr(pkt.tcp, "payload"):
+                payload = pkt.tcp.payload.replace(':', '')
+                decoded_payload = bytes.fromhex(payload).decode('utf-8', errors='ignore')
+                if decoded_payload.isascii():
+                    payload_results.append(f"TCP Payload: {decoded_payload}")
+        except AttributeError:
+            pass
+        except ValueError:
+            pass
+    return payload_results
+
+# UDP Payload analysis
+def udp_payload(pcap_file):
+    payload_results = []
+    for pkt in pcap_file:
+        try:
+            if "UDP" in pkt and hasattr(pkt.udp, "payload"):
+                payload = pkt.udp.payload.replace(':', '')
+                decoded_payload = bytes.fromhex(payload).decode('utf-8', errors='ignore')
+                if decoded_payload.isascii():
+                    payload_results.append(f"UDP Payload: {decoded_payload}")
+        except AttributeError:
+            pass
+        except ValueError:
+            pass
+    return payload_results
+
 @app.route('/', methods=['GET'])
 def index():
     return render_template_string('''
@@ -119,17 +193,17 @@ def analyze():
     if traffic_type == '1':  # HTTP Requests
         analysis_results = http_requests(pcap, api_key)
         analysis_results.extend(http_host_VTCheck(pcap, api_key))
-    elif traffic_type == '2':  # DNS Queries (Implement this function similarly)
-        pass
-    elif traffic_type == '3':  # Malicious TCP Connections (Implement this function similarly)
-        pass
+    elif traffic_type == '2':  # DNS Queries
+        analysis_results = dns_queries(pcap, api_key)
+    elif traffic_type == '3':  # Malicious TCP Connections
+        analysis_results = malicious_tcp_connections(pcap, api_key)
     elif traffic_type == '4':  # All Traffic
-        pass
+        analysis_results = analyze_all_traffic(pcap, api_key)
     elif traffic_type == '5':  # TCP Payload
-        pass
+        analysis_results = tcp_payload(pcap)
     elif traffic_type == '6':  # UDP Payload
-        pass
-
+        analysis_results = udp_payload(pcap)
+    
     # Display the results in the webpage
     return render_template_string('''
     <!DOCTYPE html>
