@@ -1,6 +1,7 @@
 import pyshark
 import requests
 import json
+import time
 from flask import Flask, request, render_template_string
 from ipaddress import ip_address
 
@@ -28,13 +29,17 @@ def domain_check_VT(domain, api_key):
                "x-apikey": api_key}
 
     vurld = urld + str(domain)
+    start_time = time.time()  # Start timer
     response = requests.get(vurld, headers=headers)
+    end_time = time.time()  # End timer
+
+    response_time = end_time - start_time  # Calculate time taken
     response_json = json.loads(response.content)
     result = ""
     try:
         if (response_json['data']['attributes']['last_analysis_stats']['malicious'] or
             response_json['data']['attributes']['last_analysis_stats']['suspicious']) > 0:
-            result = f"{str(domain)} has {str(response_json['data']['attributes']['last_analysis_stats']['malicious'])} malicious hit(s)"
+            result = f"{str(domain)} has {str(response_json['data']['attributes']['last_analysis_stats']['malicious'])} malicious hit(s). Response Time: {response_time:.2f} seconds"
     except KeyError:
         result = "You may have exceeded your VirusTotal API QUOTA or API-KEY may be invalid"
     return result
@@ -100,38 +105,6 @@ def analyze_all_traffic(pcap_file, api_key):
     all_results.extend(malicious_tcp_connections(pcap_file, api_key))
     return all_results
 
-# TCP Payload analysis
-def tcp_payload(pcap_file):
-    payload_results = []
-    for pkt in pcap_file:
-        try:
-            if "TCP" in pkt and hasattr(pkt.tcp, "payload"):
-                payload = pkt.tcp.payload.replace(':', '')
-                decoded_payload = bytes.fromhex(payload).decode('utf-8', errors='ignore')
-                if decoded_payload.isascii():
-                    payload_results.append(f"TCP Payload: {decoded_payload}")
-        except AttributeError:
-            pass
-        except ValueError:
-            pass
-    return payload_results
-
-# UDP Payload analysis
-def udp_payload(pcap_file):
-    payload_results = []
-    for pkt in pcap_file:
-        try:
-            if "UDP" in pkt and hasattr(pkt.udp, "payload"):
-                payload = pkt.udp.payload.replace(':', '')
-                decoded_payload = bytes.fromhex(payload).decode('utf-8', errors='ignore')
-                if decoded_payload.isascii():
-                    payload_results.append(f"UDP Payload: {decoded_payload}")
-        except AttributeError:
-            pass
-        except ValueError:
-            pass
-    return payload_results
-
 @app.route('/', methods=['GET'])
 def index():
     return render_template_string('''
@@ -141,70 +114,85 @@ def index():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>PCAP Analysis Tool</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     </head>
     <body>
-        <h1>PCAP Traffic Analysis Tool</h1>
-        <form action="/analyze" method="post" enctype="multipart/form-data">
-            <label for="file">Choose PCAP file:</label>
-            <input type="file" name="file" accept=".pcap,.pcapng" required><br><br>
+        <div class="container mt-5">
+            <h1 class="text-center">PCAP Traffic Analysis Tool</h1>
+            <form action="/analyze" method="post" enctype="multipart/form-data" id="analysisForm">
+                <div class="mb-3">
+                    <label for="file" class="form-label">Choose PCAP file:</label>
+                    <input type="file" name="file" accept=".pcap,.pcapng" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label for="traffic_type" class="form-label">Select Traffic Type:</label>
+                    <select name="traffic_type" class="form-select">
+                        <option value="1">HTTP Requests</option>
+                        <option value="2">DNS Queries</option>
+                        <option value="3">Malicious TCP Connections</option>
+                        <option value="4">All Traffic (HTTP, DNS, TCP)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label for="api_key" class="form-label">VirusTotal API Key:</label>
+                    <input type="text" name="api_key" class="form-control" placeholder="Enter your VirusTotal API Key" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">Analyze</button>
+            </form>
 
-            <label for="traffic_type">Select Traffic Type:</label>
-            <select name="traffic_type">
-                <option value="1">HTTP Requests</option>
-                <option value="2">DNS Queries</option>
-                <option value="3">Malicious TCP Connections</option>
-                <option value="4">All Traffic (HTTP, DNS, TCP)</option>
-                <option value="5">TCP Payload</option>
-                <option value="6">UDP Payload</option>
-            </select><br><br>
+            <div id="progressSection" class="mt-5" style="display: none;">
+                <h3>Analysis in Progress...</h3>
+                <div class="progress">
+                    <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+                </div>
+                <p id="timeLeft" class="mt-2">Estimated Time Left: <span id="timeEstimate">Calculating...</span></p>
+            </div>
+        </div>
 
-            <label for="api_key">VirusTotal API Key:</label>
-            <input type="text" name="api_key" placeholder="Enter your VirusTotal API Key" required><br><br>
+        <script>
+            document.getElementById("analysisForm").onsubmit = function () {
+                document.getElementById("progressSection").style.display = "block";
+                let progress = 0;
+                let timeLeft = 20; // Assume 20 seconds for example
+                const progressBar = document.getElementById("progressBar");
+                const timeEstimate = document.getElementById("timeEstimate");
 
-            <input type="submit" value="Analyze">
-        </form>
-
-        <h2>Analysis Results:</h2>
-        <ul>
-            {% for result in results %}
-                <li>{{ result }}</li>
-            {% endfor %}
-        </ul>
+                const interval = setInterval(() => {
+                    if (progress >= 100) {
+                        clearInterval(interval);
+                    } else {
+                        progress += 5; // Increment progress
+                        timeLeft -= 1; // Decrement time
+                        progressBar.style.width = progress + "%";
+                        timeEstimate.textContent = timeLeft + " seconds";
+                    }
+                }, 1000);
+            };
+        </script>
     </body>
     </html>
     ''')
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
-    # Get the uploaded PCAP file and API key from the form
     pcap_file = request.files['file']
     traffic_type = request.form['traffic_type']
     api_key = request.form['api_key']
     
-    # Save the uploaded file temporarily to process
     pcap_file_path = 'uploaded.pcap'
     pcap_file.save(pcap_file_path)
 
-    # Use Pyshark to capture packets from the uploaded PCAP file
     pcap = pyshark.FileCapture(pcap_file_path)
     
-    # Analyze based on the selected traffic type
-    analysis_results = []
-    if traffic_type == '1':  # HTTP Requests
+    if traffic_type == '1':
         analysis_results = http_requests(pcap, api_key)
-        analysis_results.extend(http_host_VTCheck(pcap, api_key))
-    elif traffic_type == '2':  # DNS Queries
+    elif traffic_type == '2':
         analysis_results = dns_queries(pcap, api_key)
-    elif traffic_type == '3':  # Malicious TCP Connections
+    elif traffic_type == '3':
         analysis_results = malicious_tcp_connections(pcap, api_key)
-    elif traffic_type == '4':  # All Traffic
+    elif traffic_type == '4':
         analysis_results = analyze_all_traffic(pcap, api_key)
-    elif traffic_type == '5':  # TCP Payload
-        analysis_results = tcp_payload(pcap)
-    elif traffic_type == '6':  # UDP Payload
-        analysis_results = udp_payload(pcap)
     
-    # Display the results in the webpage
     return render_template_string('''
     <!DOCTYPE html>
     <html lang="en">
@@ -212,21 +200,23 @@ def analyze():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>PCAP Analysis Tool - Results</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
     </head>
     <body>
-        <h1>PCAP Traffic Analysis Tool</h1>
-        <h2>Analysis Results:</h2>
-        <ul>
-            {% for result in results %}
-                <li>{{ result }}</li>
-            {% endfor %}
-        </ul>
-        <br>
-        <a href="/">Go back</a>
+        <div class="container mt-5">
+            <h1 class="text-center">PCAP Traffic Analysis Tool</h1>
+            <h2>Analysis Results:</h2>
+            <ul class="list-group">
+                {% for result in results %}
+                    <li class="list-group-item">{{ result }}</li>
+                {% endfor %}
+            </ul>
+            <br>
+            <a href="/" class="btn btn-secondary">Go back</a>
+        </div>
     </body>
     </html>
     ''', results=analysis_results)
 
-# Run the Flask app
 if __name__ == '__main__':
     app.run(debug=True)
